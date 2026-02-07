@@ -10,10 +10,10 @@ from typing import Literal, TypedDict
 
 from langgraph.graph import StateGraph, END
 
+from tools.llm import summarize_with_llm
 from tools.serpapi_news import fetch_news
 from tools.serpapi_search import web_search
-from tools.llm import summarize_with_llm
-from utils.sources import build_sources_block
+from utils.sources import build_sources_block, normalize_answer
 
 
 class State(TypedDict, total=False):
@@ -24,25 +24,64 @@ class State(TypedDict, total=False):
     - `items` is a list of normalized source dicts used to build the sources block.
     """
 
-    user_text: str
-    category: str | None
-    mode: Literal["NEWS", "GENERAL"]
     answer: str
-    items: list[dict]
+    category: str | None
+    cited_indices: list[int]
     error: str
+    items: list[dict]
+    mode: Literal["NEWS", "GENERAL"]
+    user_text: str
 
 
-NEWSY_TERMS = ("latest", "headlines", "news", "today", "breaking", "update")
+NEWSY_TERMS = (
+    "breaking",
+    "headlines",
+    "news",
+    "today",
+    "update",
+    "latest",
+)
+FINANCE_HINTS = (
+    "bitcoin",
+    "crypto",
+    "earnings",
+    "fed",
+    "inflation",
+    "market",
+    "markets",
+    "rates",
+    "stock",
+    "stocks",
+)
+SPORTS_HINTS = (
+    "baseball",
+    "basketball",
+    "football",
+    "hockey",
+    "mlb",
+    "nba",
+    "nfl",
+    "nhl",
+    "soccer",
+)
 
 
 def route(state: State) -> State:
-    """Decide whether to handle the request as news or a general question.
+    """Classify the request as NEWS or GENERAL.
 
-    The UI exposes an explicit category selector; otherwise we infer intent via a
-    small list of "newsy" terms.
+    Priority: explicit UI category > domain-specific keyword hints
+    (finance / sports) > generic "newsy" terms > default to GENERAL.
     """
     text = (state.get("user_text") or "").lower()
     category = state.get("category")
+
+    if not category:
+        if any(t in text for t in FINANCE_HINTS):
+            state["category"] = "finance"
+            category = "finance"
+        elif any(t in text for t in SPORTS_HINTS):
+            state["category"] = "sports"
+            category = "sports"
 
     if category or any(t in text for t in NEWSY_TERMS):
         state["mode"] = "NEWS"
@@ -77,15 +116,20 @@ def news_node(state: State) -> State:
     sources_block = build_sources_block(items=items)
 
     try:
-        state["answer"] = summarize_with_llm(
+        raw = summarize_with_llm(
             question=f"Summarize the latest {category} news related to: {user_text}",
             sources_block=sources_block,
         )
+
+        clean, cited = normalize_answer(answer=raw, max_index=len(items))
+        state["answer"] = clean
+        state["cited_indices"] = cited
         return state
+
     except Exception as e:
         state["error"] = f"summarize_with_llm (news): {e}"
         state["answer"] = sources_block
-        return state
+    return state
 
 
 def general_node(state: State) -> State:
@@ -108,10 +152,12 @@ def general_node(state: State) -> State:
     sources_block = build_sources_block(items=results)
 
     try:
-        state["answer"] = summarize_with_llm(
-            question=user_text, sources_block=sources_block
-        )
+        raw = summarize_with_llm(question=user_text, sources_block=sources_block)
+        clean, cited = normalize_answer(answer=raw, max_index=len(results))
+        state["answer"] = clean
+        state["cited_indices"] = cited
         return state
+
     except Exception as e:
         state["error"] = f"summarize_with_llm: {e}"
         state["answer"] = sources_block

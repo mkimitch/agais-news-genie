@@ -15,11 +15,11 @@ load_dotenv(override=True)
 
 
 def summarize_with_llm(*, question: str, sources_block: str) -> str:
-    """Generate a short, source-grounded answer.
+    """Generate a short, source-grounded answer with inline citations.
 
-    The prompt explicitly instructs the model to use only the provided sources
-    and to include URLs in the final output, so downstream UI can display a
-    citation trail.
+    The model is instructed to use only the provided sources and cite them with
+    bracketed numbers (e.g. ``[1]``).  A separate "Sources:" section is *not*
+    emitted — the UI renders evidence separately.
     """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -37,8 +37,12 @@ def summarize_with_llm(*, question: str, sources_block: str) -> str:
         "You are NewsGenie, an information assistant.\n"
         "Use ONLY the provided sources.\n"
         "If sources are insufficient, say so.\n"
-        "Write a short answer, then a short bullet list of key points.\n"
-        "End with 'Sources:' and include the URLs from the sources block.\n"
+        "Only cite numbers that appear in the provided Sources list.\n"
+        "Use markdown formatting.\n"
+        "Write a short answer (1-3 sentences).\n"
+        "Then write a 'Key Points' section as a markdown bullet list using '-'.\n"
+        "Include at least one citation like [1] in each key point.\n"
+        "Do NOT include a separate 'Sources:' section.\n"
     )
 
     input_text = f"Question:\n{question}\n\n" f"Sources:\n{sources_block}\n"
